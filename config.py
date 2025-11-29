@@ -1,12 +1,22 @@
-# config.py
-TOKEN = "8503295225:AAE7peLH1rrmYZSjmZKTnE5dTZOMETuQsS8"
-CHANNEL_ID = -1002195840378        # ID канала @senseandart
-ADMIN_ID = 727499620                # ваш личный Telegram ID (для уведомлений)
+import os
+from dotenv import load_dotenv
 
-# Google Sheets (один раз настроить)
-SPREADSHEET_ID = "1AbCdEfGhIjK...ваш_ID_таблицы..."  # создайте таблицу и вставьте сюда ID из URL
-GOOGLE_SHEET_NAME = "subscribers"
+load_dotenv()
 
+# Токен бота @saleofart_bot
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+# Админ (ты)
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+
+# Канал и закреплённый пост
+CHANNEL_USERNAME = "@senseandart"
+PINNED_POST_URL = "https://t.me/senseandart/123"  # замени на реальный ID поста
+
+# Промокод и файл Excel
 PROMO_CODE = "ART10"
-PINNED_POST_LINK = "https://t.me/senseandart/42"
+EXCEL_FILE = "subscribers.xlsx"
 
+# Яндекс.Диск (если нужно облако; можно оставить пустым)
+YADISK_TOKEN = os.getenv("YADISK_TOKEN", "")
+YADISK_PATH = "app:/subscribers.xlsx"
