@@ -17,6 +17,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+from telegram.error import BadRequest
 
 from localization import detect_lang, t
 import config
@@ -47,7 +48,7 @@ def menu_for_subscribed(lang: str) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
-# ---------- Работа с Excel ----------
+# ---------- Работа с "базой данных" (Excel) ----------
 def load_subscribers_df() -> pd.DataFrame:
     if os.path.exists(config.EXCEL_FILE):
         return pd.read_excel(config.EXCEL_FILE)
@@ -56,9 +57,10 @@ def load_subscribers_df() -> pd.DataFrame:
             "user_id",
             "username",
             "full_name",
-            "joined_at",
+            "joined_at",        # время первой подписки
             "promo_code",
             "status",
+            "unsubscribed_at",  # время первой отписки
         ]
     )
 
@@ -67,12 +69,19 @@ def save_subscribers_df(df: pd.DataFrame):
     df.to_excel(config.EXCEL_FILE, index=False)
 
 
-def user_has_promo(user_id: int) -> tuple[bool, str | None]:
+def user_row(user_id: int) -> pd.Series | None:
     df = load_subscribers_df()
     row = df[df["user_id"] == user_id]
     if row.empty:
+        return None
+    return row.iloc[0]
+
+
+def user_has_promo(user_id: int) -> tuple[bool, str | None]:
+    row = user_row(user_id)
+    if row is None:
         return False, None
-    promo = row.iloc[0].get("promo_code") or None
+    promo = row.get("promo_code") or None
     return bool(promo), promo
 
 
@@ -81,21 +90,26 @@ def save_subscriber_to_excel(
     username: str | None,
     full_name: str | None,
     promo_code: str,
-):
+) -> bool:
+    """
+    Сохраняет подписчика в таблицу.
+    Возвращает True, если это первая запись для этого user_id (новый подписчик).
+    """
     df = load_subscribers_df()
 
     existing = df[df["user_id"] == user_id]
     if not existing.empty and existing.iloc[0].get("promo_code"):
         logger.info("User %s already has promo, not adding duplicate row", user_id)
-        return
+        return False  # не новый
 
     row = {
         "user_id": user_id,
         "username": username or "",
         "full_name": full_name or "",
-        "joined_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "joined_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # логируем время подписки
         "promo_code": promo_code,
         "status": "подписан",
+        "unsubscribed_at": "",
     }
 
     df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
@@ -103,6 +117,46 @@ def save_subscriber_to_excel(
     logger.info("Saved subscriber to Excel: %s (@%s)", user_id, username)
 
     upload_excel_to_yadisk()
+    return True  # новый подписчик
+
+
+def mark_unsubscribed(user_id: int) -> bool:
+    """
+    Отмечает пользователя как отписавшегося и логирует время отписки.
+    Возвращает True, если статус реально изменился с другого на 'отписан'.
+    """
+    df = load_subscribers_df()
+    idx = df.index[df["user_id"] == user_id]
+
+    if len(idx) == 0:
+        return False
+
+    i = idx[0]
+    prev_status = df.at[i, "status"]
+    if prev_status == "отписан":
+        return False
+
+    df.at[i, "status"] = "отписан"
+    df.at[i, "unsubscribed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    save_subscribers_df(df)
+    logger.info("Marked user %s as unsubscribed", user_id)
+    return True
+
+
+def mark_subscribed_if_exists(user_id: int) -> None:
+    """
+    Если пользователь уже есть в таблице, обновляет статус на 'подписан'.
+    joined_at и unsubscribed_at не трогаем.
+    """
+    df = load_subscribers_df()
+    idx = df.index[df["user_id"] == user_id]
+    if len(idx) == 0:
+        return
+    i = idx[0]
+    if df.at[i, "status"] != "подписан":
+        df.at[i, "status"] = "подписан"
+        save_subscribers_df(df)
+        logger.info("Updated user %s status back to 'подписан'", user_id)
 
 
 # ---------- Яндекс.Диск (опционально) ----------
@@ -145,9 +199,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     subscribed = await is_user_subscribed(context, user_id)
 
+    # НЕ подписан
     if not subscribed:
-        # ТОЛЬКО одно сообщение с текстом + меню.
-        # Никаких дополнительных inline-кнопок, чтобы не дублировать.
         menu = menu_for_not_subscribed(lang)
         if update.message is not None:
             await update.message.reply_text(
@@ -156,8 +209,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    # подписан — меню без кнопки "Подписаться"
+    # Подписан
     menu = menu_for_subscribed(lang)
+
+    row = user_row(user_id)
+    is_new_in_excel = row is None
 
     has_promo, existing_promo = user_has_promo(user_id)
 
@@ -182,13 +238,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message is not None:
             await update.message.reply_text(promo_text, reply_markup=menu)
             await update.message.reply_text(t(lang, "pinned_button"), reply_markup=pinned_keyboard)
-        save_subscriber_to_excel(user_id, username, full_name, config.PROMO_CODE)
+        # Сохраняем в таблицу, логируем время подписки
+        created_now = save_subscriber_to_excel(user_id, username, full_name, config.PROMO_CODE)
+        is_new_in_excel = is_new_in_excel or created_now
 
-    if config.ADMIN_ID:
+    # Если запись уже была, но статус мог быть "отписан" — вернём в "подписан"
+    if not is_new_in_excel:
+        mark_subscribed_if_exists(user_id)
+
+    # Уведомляем администратора ТОЛЬКО при первой записи (новой подписке)
+    if is_new_in_excel and config.ADMIN_ID:
         try:
             await context.bot.send_message(
                 chat_id=config.ADMIN_ID,
-                text=f"Новый подписчик: {user_id} (@{username}) язык={lang}",
+                text=f"Новый подписчик канала: {user_id} (@{username}) язык={lang}",
             )
         except Exception as e:
             logger.warning("Failed to notify admin: %s", e)
@@ -201,9 +264,38 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     lang = detect_lang(user.language_code)
-    is_sub = await is_user_subscribed(context, user.id)
-    text = "Вы подписаны на канал ✅" if is_sub else "Вы не подписаны на канал ❌"
-    menu = menu_for_subscribed(lang) if is_sub else menu_for_not_subscribed(lang)
+    user_id = user.id
+
+    is_sub = await is_user_subscribed(context, user_id)
+
+    row = user_row(user_id)
+    prev_status = row.get("status") if row is not None else None
+
+    if is_sub:
+        text = "Вы подписаны на канал ✅"
+        menu = menu_for_subscribed(lang)
+        if prev_status != "подписан" and row is not None:
+            mark_subscribed_if_exists(user_id)
+    else:
+        text = "Вы не подписаны на канал ❌"
+        menu = menu_for_not_subscribed(lang)
+
+        # если раньше был "подписан" — считаем, что это первая отписка
+        if prev_status == "подписан":
+            changed = mark_unsubscribed(user_id)  # логируем время отписки
+            if changed and config.ADMIN_ID:
+                try:
+                    await context.bot.send_message(
+                        chat_id=config.ADMIN_ID,
+                        text=(
+                            "Пользователь ОТПИСАЛСЯ от канала:\n"
+                            f"id: {user_id}\n"
+                            f"username: @{user.username if user.username else 'нет'}\n"
+                            f"имя: {user.full_name}"
+                        ),
+                    )
+                except Exception as e:
+                    logger.warning("Failed to notify admin about unsubscribe: %s", e)
 
     await update.message.reply_text(text, reply_markup=menu)
 
@@ -242,7 +334,6 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "действующий промокод":
         await promo(update, context)
     elif text == "подписаться на канал":
-        # ТОЛЬКО здесь даём кнопку-ссылку "Перейти в канал"
         channel_keyboard = InlineKeyboardMarkup(
             [
                 [
@@ -259,6 +350,13 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         return
+
+
+# ---------- Обработчик ошибок (опционально) ----------
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error("Exception while handling an update:", exc_info=context.error)
+    if isinstance(context.error, BadRequest):
+        logger.error("BadRequest message: %s", context.error.message)
 
 
 # ---------- Команды для кнопки «/» ----------
@@ -284,8 +382,9 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), menu_text_handler))
 
     app.post_init = set_commands
+    app.add_error_handler(error_handler)
 
-    logger.info("Bot для канала @senseandart запущен")
+    logger.info("Bot для канала запущен")
     app.run_polling(drop_pending_updates=True)
 
 
