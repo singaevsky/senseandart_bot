@@ -1,6 +1,6 @@
 # config.py
 TOKEN = "8503295225:AAE7peLH1rrmYZSjmZKTnE5dTZOMETuQsS8"
-CHANNEL_ID = -1003027665711        # ID канала @senseandart
+CHANNEL_ID = -1002195840378        # ID канала @senseandart
 ADMIN_ID = 727499620                # ваш личный Telegram ID (для уведомлений)
 
 # Google Sheets (один раз настроить)
@@ -9,3 +9,4 @@ GOOGLE_SHEET_NAME = "subscribers"
 
 PROMO_CODE = "ART10"
 PINNED_POST_LINK = "https://t.me/senseandart/42"
+
