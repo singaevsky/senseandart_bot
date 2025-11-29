@@ -217,27 +217,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     has_promo, existing_promo = user_has_promo(user_id)
 
-    pinned_keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    t(lang, "pinned_button"),
-                    url=config.PINNED_POST_URL,
-                )
-            ]
-        ]
-    )
-
     if has_promo and existing_promo:
         text = t(lang, "already_has_promo", promo=existing_promo)
         if update.message is not None:
             await update.message.reply_text(text, reply_markup=menu)
-            await update.message.reply_text(t(lang, "pinned_button"), reply_markup=pinned_keyboard)
     else:
         promo_text = t(lang, "start_promo", promo=config.PROMO_CODE)
         if update.message is not None:
             await update.message.reply_text(promo_text, reply_markup=menu)
-            await update.message.reply_text(t(lang, "pinned_button"), reply_markup=pinned_keyboard)
         # Сохраняем в таблицу, логируем время подписки
         created_now = save_subscriber_to_excel(user_id, username, full_name, config.PROMO_CODE)
         is_new_in_excel = is_new_in_excel or created_now
@@ -361,32 +348,4 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 # ---------- Команды для кнопки «/» ----------
 async def set_commands(app: Application):
-    await app.bot.set_my_commands(
-        [
-            BotCommand("start", "Старт"),
-            BotCommand("check", "Проверка подписки"),
-            BotCommand("promo", "Действующий промокод"),
-        ]
-    )
-
-
-def main():
-    if not config.TELEGRAM_BOT_TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN не задан (проверь .env)")
-
-    app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("check", check_subscription))
-    app.add_handler(CommandHandler("promo", promo))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), menu_text_handler))
-
-    app.post_init = set_commands
-    app.add_error_handler(error_handler)
-
-    logger.info("Bot для канала запущен")
-    app.run_polling(drop_pending_updates=True)
-
-
-if __name__ == "__main__":
-    main()
+    await app.bot
