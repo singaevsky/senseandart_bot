@@ -1,0 +1,7 @@
+{
+  "start_subscribe": "Hi! To get a 10% discount promo code, please subscribe to the \"Art and Meanings\" channel first.",
+  "start_promo": "Thanks for subscribing!\n\nYour 10% discount promo code: {promo}\nUse it when ordering on our website.",
+  "already_has_promo": "You have already received a promo code. Use this code: {promo}",
+  "channel_button": "Go to channel",
+  "pinned_button": "Go to important post"
+}
