@@ -1,199 +1,293 @@
-# bot.py — полностью исправленная версия под aiogram ≥ 3.7
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-from aiogram import Router
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
-import asyncio
-import pandas as pd
-from datetime import datetime
-import os
 import logging
+import os
+from datetime import datetime
 
-from config import TOKEN, CHANNEL_ID, ADMIN_ID, PROMO_CODE, PINNED_POST_LINK
+import pandas as pd
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    BotCommand,
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
-# ------------------- Google Sheets (опционально) -------------------
-try:
-    from googleapiclient.discovery import build
-    from google.oauth2.credentials import Credentials
-    from google_auth_oauthlib.flow import InstalledAppFlow
-    from google.auth.transport.requests import Request
-    import pickle
-    GOOGLE_SHEETS_ENABLED = True
-except ImportError:
-    GOOGLE_SHEETS_ENABLED = False
+from localization import detect_lang, t
+import config
 
-logging.basicConfig(level=logging.INFO)
 
-# ВОТ ГЛАВНОЕ ИСПРАВЛЕНИЕ:
-default_properties = DefaultBotProperties(parse_mode=ParseMode.HTML)
-bot = Bot(token=TOKEN, default=default_properties)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
-router = Router()
 
-EXCEL_FILE = "subscribers.xlsx"
+# ---------- Меню-клавиатуры ----------
+def menu_for_not_subscribed(lang: str) -> ReplyKeyboardMarkup:
+    keyboard = [
+        ["Старт", "Проверка подписки"],
+        ["Действующий промокод"],
+        ["Подписаться на канал"],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# =================== Google Sheets ===================
-def get_google_sheet_service():
-    if not GOOGLE_SHEETS_ENABLED:
-        return None
-    SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-    creds = None
-    if os.path.exists('token.pickle'):
-        with open('token.pickle', 'rb') as token:
-            creds = pickle.load(token)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.pickle', 'wb') as token:
-            pickle.dump(creds, token)
-    return build('sheets', 'v4', credentials=creds)
 
-def append_to_google_sheets(row):
-    if not GOOGLE_SHEETS_ENABLED:
+def menu_for_subscribed(lang: str) -> ReplyKeyboardMarkup:
+    keyboard = [
+        ["Старт", "Проверка подписки"],
+        ["Действующий промокод"],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+# ---------- Работа с Excel ----------
+def load_subscribers_df() -> pd.DataFrame:
+    if os.path.exists(config.EXCEL_FILE):
+        return pd.read_excel(config.EXCEL_FILE)
+    return pd.DataFrame(
+        columns=[
+            "user_id",
+            "username",
+            "full_name",
+            "joined_at",
+            "promo_code",
+            "status",
+        ]
+    )
+
+
+def save_subscribers_df(df: pd.DataFrame):
+    df.to_excel(config.EXCEL_FILE, index=False)
+
+
+def user_has_promo(user_id: int) -> tuple[bool, str | None]:
+    df = load_subscribers_df()
+    row = df[df["user_id"] == user_id]
+    if row.empty:
+        return False, None
+    promo = row.iloc[0].get("promo_code") or None
+    return bool(promo), promo
+
+
+def save_subscriber_to_excel(
+    user_id: int,
+    username: str | None,
+    full_name: str | None,
+    promo_code: str,
+):
+    df = load_subscribers_df()
+
+    existing = df[df["user_id"] == user_id]
+    if not existing.empty and existing.iloc[0].get("promo_code"):
+        logger.info("User %s already has promo, not adding duplicate row", user_id)
         return
-    try:
-        service = get_google_sheet_service()
-        body = {'values': [row]}
-        service.spreadsheets().values().append(
-            spreadsheetId=SPREADSHEET_ID,
-            range="subscribers!A:F",
-            valueInputOption="RAW",
-            insertDataOption="INSERT_ROWS",
-            body=body
-        ).execute()
-    except Exception as e:
-        logging.error(f"Google Sheets error: {e}")
 
-# =================== Excel ===================
-def load_subscribers():
-    if os.path.exists(EXCEL_FILE):
-        return pd.read_excel(EXCEL_FILE)
-    else:
-        df = pd.DataFrame(columns=[
-            'user_id', 'username', 'first_name', 'subscribe_date', 'promo_code', 'status'
-        ])
-        df.to_excel(EXCEL_FILE, index=False)
-        return df
-
-def save_subscriber(user_id, username, first_name):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    new_row = {
-        'user_id': user_id,
-        'username': f"@{username}" if username else "нет",
-        'first_name': first_name or "нет",
-        'subscribe_date': now,
-        'promo_code': PROMO_CODE,
-        'status': 'подписан'
+    row = {
+        "user_id": user_id,
+        "username": username or "",
+        "full_name": full_name or "",
+        "joined_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "promo_code": promo_code,
+        "status": "подписан",
     }
 
-    # Excel
-    df = load_subscribers()
-    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-    df.to_excel(EXCEL_FILE, index=False)
+    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    save_subscribers_df(df)
+    logger.info("Saved subscriber to Excel: %s (@%s)", user_id, username)
 
-    # Google Sheets
-    row_for_gs = [user_id, f"@{username}" if username else "", first_name or "", now, PROMO_CODE, "подписан"]
-    append_to_google_sheets(row_for_gs)
+    upload_excel_to_yadisk()
 
-# =================== Клавиатуры и язык ===================
-def get_start_keyboard(lang: str):
-    text = "Перейти к важному посту" if lang == "ru" else "Go to the important post"
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=text, url=PINNED_POST_LINK)]])
 
-def get_subscribe_keyboard(lang: str):
-    btn1 = "Подписаться на канал" if lang == "ru" else "Subscribe to the channel"
-    btn2 = "Я подписался" if lang == "ru" else "I subscribed"
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=btn1, url="https://t.me/senseandart")],
-        [InlineKeyboardButton(text=btn2, callback_data="check_subscription")]
-    ])
+# ---------- Яндекс.Диск (опционально) ----------
+def upload_excel_to_yadisk():
+    if not config.YADISK_TOKEN:
+        return
+    try:
+        import yadisk
 
-def detect_language(user: types.User) -> str:
-    return "ru" if user.language_code and user.language_code.startswith('ru') else "en"
+        disk = yadisk.YaDisk(token=config.YADISK_TOKEN)
+        with open(config.EXCEL_FILE, "rb") as f:
+            disk.upload_file(f, path=config.YADISK_PATH, overwrite=True)
+        logger.info("Excel uploaded to Yandex.Disk: %s", config.YADISK_PATH)
+    except Exception as e:
+        logger.warning("Failed to upload Excel to Yandex.Disk: %s", e)
 
-# =================== Хендлеры ===================
-@router.message(Command("start"))
-async def cmd_start(message: types.Message):
-    user = message.from_user
-    lang = detect_language(user)
 
-    # Проверяем, получал ли уже промокод
-    df = load_subscribers()
-    if user.id in df['user_id'].values:
-        text = (
-            f"Привет снова, {user.first_name}! 😊\n\n"
-            f"Твой промокод: <b>{PROMO_CODE}</b>\n"
-            "Он всё ещё действителен (скидка 10%)."
-        ) if lang == "ru" else (
-            f"Hi again, {user.first_name}! 😊\n\n"
-            f"Your promo code: <b>{PROMO_CODE}</b>\n"
-            "Still valid (10% discount)."
-        )
-        await message.answer(text, reply_markup=get_start_keyboard(lang))
+# ---------- Проверка подписки ----------
+async def is_user_subscribed(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
+    try:
+        member = await context.bot.get_chat_member(chat_id=config.CHANNEL_USERNAME, user_id=user_id)
+        return member.status in ("member", "administrator", "creator")
+    except Exception as e:
+        logger.warning("Check subscription failed for %s: %s", user_id, e)
+        return False
+
+
+# ---------- /start ----------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user is None:
         return
 
-    # Проверка подписки
-    try:
-        member = await bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user.id)
-        if member.status in ['member', 'administrator', 'creator']:
-            # Подписан → выдаём промокод
-            save_subscriber(user.id, user.username, user.full_name)
+    user_id = user.id
+    username = user.username
+    full_name = user.full_name
+    lang = detect_lang(user.language_code)
 
-            # Уведомление админу
-            await bot.send_message(
-                ADMIN_ID,
-                f"Новый подписчик!\n\n"
-                f"Имя: {user.full_name}\n"
-                f"Username: @{user.username or 'нет'}\n"
-                f"ID: {user.id}\n"
-                f"Промокод: {PROMO_CODE}"
+    logger.info("User %s (%s) sent /start lang=%s", user_id, username, lang)
+
+    subscribed = await is_user_subscribed(context, user_id)
+
+    if not subscribed:
+        # ТОЛЬКО одно сообщение с текстом + меню.
+        # Никаких дополнительных inline-кнопок, чтобы не дублировать.
+        menu = menu_for_not_subscribed(lang)
+        if update.message is not None:
+            await update.message.reply_text(
+                t(lang, "start_subscribe"),
+                reply_markup=menu,
             )
+        return
 
-            text = (
-                f"Спасибо за подписку, {user.first_name}! 🎨\n\n"
-                f"Ваш промокод на <b>10% скидку</b>:\n"
-                f"<code>{PROMO_CODE}</code>\n\n"
-                "Используйте его при оформлении заказа.\n"
-                "А теперь самое важное:"
-            ) if lang == "ru" else (
-                f"Thank you for subscribing, {user.first_name}! 🎨\n\n"
-                f"Your <b>10% discount</b> promo code:\n"
-                f"<code>{PROMO_CODE}</code>\n\n"
-                "Use it at checkout.\n"
-                "And now the most important:"
+    # подписан — меню без кнопки "Подписаться"
+    menu = menu_for_subscribed(lang)
+
+    has_promo, existing_promo = user_has_promo(user_id)
+
+    pinned_keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    t(lang, "pinned_button"),
+                    url=config.PINNED_POST_URL,
+                )
+            ]
+        ]
+    )
+
+    if has_promo and existing_promo:
+        text = t(lang, "already_has_promo", promo=existing_promo)
+        if update.message is not None:
+            await update.message.reply_text(text, reply_markup=menu)
+            await update.message.reply_text(t(lang, "pinned_button"), reply_markup=pinned_keyboard)
+    else:
+        promo_text = t(lang, "start_promo", promo=config.PROMO_CODE)
+        if update.message is not None:
+            await update.message.reply_text(promo_text, reply_markup=menu)
+            await update.message.reply_text(t(lang, "pinned_button"), reply_markup=pinned_keyboard)
+        save_subscriber_to_excel(user_id, username, full_name, config.PROMO_CODE)
+
+    if config.ADMIN_ID:
+        try:
+            await context.bot.send_message(
+                chat_id=config.ADMIN_ID,
+                text=f"Новый подписчик: {user_id} (@{username}) язык={lang}",
             )
-            await message.answer(text, reply_markup=get_start_keyboard(lang))
-        else:
-            # Не подписан
-            text = (
-                "Чтобы получить скидку 10%, подпишись на канал «Искусство и смыслы» 👇"
-            ) if lang == "ru" else (
-                "To get a 10% discount, subscribe to the channel «Art & Meanings» 👇"
-            )
-            await message.answer(text, reply_markup=get_subscribe_keyboard(lang))
-    except Exception as e:
-        logging.error(e)
-        await message.answer("Ошибка. Попробуйте позже / Try again later.")
+        except Exception as e:
+            logger.warning("Failed to notify admin: %s", e)
 
-@router.callback_query(F.data == "check_subscription")
-async def check_after_subscribe(callback: types.CallbackQuery):
-    await callback.message.delete()  # убираем кнопки
-    await cmd_start(callback.message)  # повторяем проверку
-    await callback.answer()
 
-# =================== Запуск ===================
-async def main():
-    dp.include_router(router)
-    await dp.start_polling(bot)
+# ---------- /check ----------
+async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user is None or update.message is None:
+        return
+
+    lang = detect_lang(user.language_code)
+    is_sub = await is_user_subscribed(context, user.id)
+    text = "Вы подписаны на канал ✅" if is_sub else "Вы не подписаны на канал ❌"
+    menu = menu_for_subscribed(lang) if is_sub else menu_for_not_subscribed(lang)
+
+    await update.message.reply_text(text, reply_markup=menu)
+
+
+# ---------- /promo ----------
+async def promo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user is None or update.message is None:
+        return
+
+    lang = detect_lang(user.language_code)
+
+    has_promo, existing_promo = user_has_promo(user.id)
+    if has_promo and existing_promo:
+        text = t(lang, "already_has_promo", promo=existing_promo)
+    else:
+        text = "Для получения промокода сначала нажмите «Старт» и подпишитесь на канал."
+
+    is_sub = await is_user_subscribed(context, user.id)
+    menu = menu_for_subscribed(lang) if is_sub else menu_for_not_subscribed(lang)
+
+    await update.message.reply_text(text, reply_markup=menu)
+
+
+# ---------- Обработка текстовых кнопок меню ----------
+async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message is None or update.effective_user is None:
+        return
+
+    text = (update.message.text or "").strip().lower()
+
+    if text == "старт":
+        await start(update, context)
+    elif text == "проверка подписки":
+        await check_subscription(update, context)
+    elif text == "действующий промокод":
+        await promo(update, context)
+    elif text == "подписаться на канал":
+        # ТОЛЬКО здесь даём кнопку-ссылку "Перейти в канал"
+        channel_keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "Перейти в канал",
+                        url=f"https://t.me/{config.CHANNEL_USERNAME.lstrip('@')}",
+                    )
+                ],
+            ]
+        )
+        await update.message.reply_text(
+            "Нажмите кнопку, чтобы перейти в канал:",
+            reply_markup=channel_keyboard,
+        )
+    else:
+        return
+
+
+# ---------- Команды для кнопки «/» ----------
+async def set_commands(app: Application):
+    await app.bot.set_my_commands(
+        [
+            BotCommand("start", "Старт"),
+            BotCommand("check", "Проверка подписки"),
+            BotCommand("promo", "Действующий промокод"),
+        ]
+    )
+
+
+def main():
+    if not config.TELEGRAM_BOT_TOKEN:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN не задан (проверь .env)")
+
+    app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("check", check_subscription))
+    app.add_handler(CommandHandler("promo", promo))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), menu_text_handler))
+
+    app.post_init = set_commands
+
+    logger.info("Bot для канала @senseandart запущен")
+    app.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
