@@ -126,10 +126,10 @@ def inline_channel_keyboard(lang: str) -> InlineKeyboardMarkup:
     channel = getattr(config, 'CHANNEL_USERNAME', None)
     if channel:
         ch = str(channel).lstrip('@')
-        url = f"https://t.me/{ch}/3"
+        url = f"https://t.me/{ch}/1"
     else:
         # Fallback to previous hardcoded path if config not provided
-        url = "https://t.me/senseandart/3"
+        url = "https://t.me/senseandart/1"
 
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton(text=label, url=url)]]
