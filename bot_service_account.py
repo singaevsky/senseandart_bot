@@ -283,11 +283,11 @@ async def welcome_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     subscribed = await is_user_subscribed(context, user_id)
 
     if not subscribed:
-        # Не подписан - показываем приветствие с просьбой подписаться
-        await send_reply(update, t(lang, "welcome_not_subscribed"), reply_markup=inline_menu_for_not_subscribed(lang))
+        # Не подписан - показываем приветствие с просьбой подписаться (reply keyboard для совместимости)
+        await send_reply(update, t(lang, "welcome_not_subscribed"), reply_markup=menu_for_not_subscribed(lang))
     else:
-        # Подписан - показываем приветствие и меню
-        await send_reply(update, t(lang, "welcome_subscribed"), reply_markup=inline_menu_for_subscribed(lang))
+        # Подписан - показываем приветствие и меню (reply keyboard для совместимости)
+        await send_reply(update, t(lang, "welcome_subscribed"), reply_markup=menu_for_subscribed(lang))
 
 
 # ---------- Обработчик команды /start ----------
@@ -341,13 +341,13 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
     has_promo, existing_promo = gs.user_has_promo(user_id)
 
     if has_promo and existing_promo:
-        # Пользователь уже имеет промокод — показываем сообщение благодарности и предложение участвовать в акциях
-        text = t(lang, "subscribed_thanks_no_more")
-        await send_reply(update, text, reply_markup=inline_menu_for_subscribed(lang))
+        # Пользователь уже имеет промокод — показываем сообщение с промокодом и приглашением
+        text = t(lang, "subscribed_thanks_with_promo", promo=existing_promo)
+        await send_reply(update, text, reply_markup=menu_for_subscribed(lang))
     else:
         # Пользователь не имеет промокода — выдаём и поздравляем
         promo_assigned_text = t(lang, "congrats_promo_assigned", promo=config.PROMO_CODE)
-        await send_reply(update, promo_assigned_text, reply_markup=inline_menu_for_subscribed(lang))
+        await send_reply(update, promo_assigned_text, reply_markup=menu_for_subscribed(lang))
 
         # Уведомляем о получении промокода
         await notify_admin_promo_received(context, user, config.PROMO_CODE)
@@ -388,7 +388,7 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if is_sub:
         text = t(lang, "welcome_subscribed")
-        await send_reply(update, text, reply_markup=inline_menu_for_subscribed(lang))
+        await send_reply(update, text, reply_markup=menu_for_subscribed(lang))
 
         if prev_status != "подписан" and row is not None:
             gs.mark_subscribed_if_exists(user_id)
@@ -416,7 +416,7 @@ async def promo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if has_promo and existing_promo:
         text = t(lang, "already_has_promo", promo=existing_promo)
         is_sub = await is_user_subscribed(context, user.id)
-        menu = inline_menu_for_subscribed(lang) if is_sub else inline_menu_for_not_subscribed(lang)
+        menu = menu_for_subscribed(lang) if is_sub else menu_for_not_subscribed(lang)
         await send_reply(update, text, reply_markup=menu)
     else:
         text = t(lang, "start_subscribe")
