@@ -6,4 +6,10 @@
   "start_promo": "Ваш промокод: {promo}",
   "go_to_channel": "Открыть канал",
   "go_to_channel_prompt": "Нажмите кнопку ниже, чтобы перейти в канал и подписаться:"
+  ,"btn_start": "Старт",
+  "btn_check": "Проверка подписки",
+  "btn_promo": "Действующий промокод",
+  "btn_go_to_channel": "Перейти в канал",
+  "status_subscribed": "✅ Вы подписаны на канал",
+  "status_not_subscribed": "❌ Вы не подписаны на канал"
 }
