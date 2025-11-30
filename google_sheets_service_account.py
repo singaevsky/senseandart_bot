@@ -132,7 +132,7 @@ def _open_sheet(gc: Optional[gspread.Client] = None) -> gspread.Spreadsheet:
         lambda: gc.open_by_url(spreadsheet_url),
 
         # Метод 2: open_by с ключом (для некоторых версий)
-        lambda: gc.open_by(config.GOOGLE_SHEETS_ID),
+        lambda: gc.open_by_key(config.GOOGLE_SHEETS_ID),
 
         # Метод 3: open с полным URL (для очень старых версий)
         lambda: gc.open(spreadsheet_url),
@@ -172,10 +172,11 @@ def _sheet(gc: Optional[gspread.Client] = None) -> gspread.Worksheet:
     except gspread.WorksheetNotFound:
         logger.warning(f"⚠️ Лист '{config.SHEET_NAME}' не найден. Создаю новый...")
         try:
+            # Исправлено: передаем int вместо строк для rows и cols
             worksheet = sp.add_worksheet(
                 title=config.SHEET_NAME,
-                rows="1000",
-                cols="10"
+                rows=1000,  # ← int вместо "1000"
+                cols=10     # ← int вместо "10"
             )
             logger.info(f"✅ Создан новый лист: {config.SHEET_NAME}")
             return worksheet
