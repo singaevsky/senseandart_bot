@@ -4,4 +4,11 @@
   "already_has_promo": "You have already received a promo code. Use this code: {promo}",
   "channel_button": "Go to channel",
   "pinned_button": "Go to important post"
+  ,"btn_start": "Start",
+  "btn_check": "Check subscription",
+  "btn_promo": "Current promo",
+  "btn_go_to_channel": "Go to channel",
+  "status_subscribed": "✅ You are subscribed to the channel",
+  "status_not_subscribed": "❌ You are not subscribed to the channel",
+  "go_to_channel_prompt": "Press the button below to go to the channel and subscribe:"
 }
