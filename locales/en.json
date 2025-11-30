@@ -13,5 +13,6 @@
   "go_to_channel_prompt": "Press the button below to go to the channel and subscribe:",
   "welcome_subscribed": "🎉 Thanks for subscribing! Press \"I want the code!\" to receive your promo code.",
   "subscribed_thanks_no_more": "🎉 Thanks for subscribing! We hope you'll join our future channel promotions.",
+  "subscribed_thanks_with_promo": "🎉 Thanks for subscribing! You've been provided the promo code: {promo}. We hope you'll join our future channel promotions.",
   "congrats_promo_assigned": "Congratulations! You've been assigned a promo code: {promo}"
 }
