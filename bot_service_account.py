@@ -1,11 +1,12 @@
 # bot_service_account.py
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Optional, cast
 
 from telegram import (
     Update,
     User,
+    Message,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
@@ -16,6 +17,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
 from telegram.error import BadRequest
@@ -94,6 +96,25 @@ def menu_for_subscribed(lang: str) -> ReplyKeyboardMarkup:
         [t(lang, "btn_promo")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+def inline_menu_for_not_subscribed(lang: str) -> InlineKeyboardMarkup:
+    """Inline-меню для неподписанных пользователей."""
+    buttons = [
+        [InlineKeyboardButton(text=t(lang, "btn_start"), callback_data="start") , InlineKeyboardButton(text=t(lang, "btn_check"), callback_data="check")],
+        [InlineKeyboardButton(text=t(lang, "btn_promo"), callback_data="promo")],
+        [InlineKeyboardButton(text=t(lang, "btn_go_to_channel"), callback_data="go_channel")],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+
+def inline_menu_for_subscribed(lang: str) -> InlineKeyboardMarkup:
+    """Inline-меню для подписанных пользователей."""
+    buttons = [
+        [InlineKeyboardButton(text=t(lang, "btn_start"), callback_data="start") , InlineKeyboardButton(text=t(lang, "btn_check"), callback_data="check")],
+        [InlineKeyboardButton(text=t(lang, "btn_promo"), callback_data="promo")],
+    ]
+    return InlineKeyboardMarkup(buttons)
 
 
 # ---------- Клавиатура с кнопкой перехода в канал ----------
@@ -210,6 +231,21 @@ async def notify_admin_unsubscribed(context: ContextTypes.DEFAULT_TYPE, user: Us
         logger.warning("Не удалось уведомить об отписке: %s", e)
 
 
+async def send_reply(update: Update, text: str, reply_markup=None):
+    """Helper: send reply to message or to callback_query.message."""
+    # Try to reply to a normal message if present
+    if getattr(update, 'message', None) is not None and update.message is not None:
+        msg = cast(Message, update.message)
+        await msg.reply_text(text, reply_markup=reply_markup)
+
+    # Otherwise, try to reply to the message attached to a callback_query
+    elif getattr(update, 'callback_query', None) is not None:
+        cq = update.callback_query
+        if cq is not None and getattr(cq, 'message', None) is not None and cq.message is not None:
+            msg = cast(Message, cq.message)
+            await msg.reply_text(text, reply_markup=reply_markup)
+
+
 # ---------- Приветствие при первом запуске ----------
 async def welcome_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает приветственное сообщение при первом запуске бота."""
@@ -248,18 +284,10 @@ async def welcome_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not subscribed:
         # Не подписан - показываем приветствие с просьбой подписаться
-        if update.message is not None:
-            await update.message.reply_text(
-                t(lang, "welcome_not_subscribed"),
-                reply_markup=menu_for_not_subscribed(lang),
-            )
+        await send_reply(update, t(lang, "welcome_not_subscribed"), reply_markup=inline_menu_for_not_subscribed(lang))
     else:
         # Подписан - показываем приветствие и меню
-        if update.message is not None:
-            await update.message.reply_text(
-                t(lang, "welcome_subscribed"),
-                reply_markup=menu_for_subscribed(lang),
-            )
+        await send_reply(update, t(lang, "welcome_subscribed"), reply_markup=inline_menu_for_subscribed(lang))
 
 
 # ---------- Обработчик команды /start ----------
@@ -301,12 +329,7 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
         # Не подписан - предлагаем перейти к 3-му посту
         prompt = t(lang, "start_subscribe")
         inline_kb = inline_channel_keyboard(lang)
-
-        if update.message is not None:
-            await update.message.reply_text(
-                prompt,
-                reply_markup=inline_kb,
-            )
+        await send_reply(update, prompt, reply_markup=inline_kb)
         return
 
     # Подписан - выдаем промокод
@@ -318,13 +341,13 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
     has_promo, existing_promo = gs.user_has_promo(user_id)
 
     if has_promo and existing_promo:
-        text = t(lang, "already_has_promo", promo=existing_promo)
-        if update.message is not None:
-            await update.message.reply_text(text, reply_markup=menu)
+        # Пользователь уже имеет промокод — показываем сообщение благодарности и предложение участвовать в акциях
+        text = t(lang, "subscribed_thanks_no_more")
+        await send_reply(update, text, reply_markup=inline_menu_for_subscribed(lang))
     else:
-        promo_text = t(lang, "start_promo", promo=config.PROMO_CODE)
-        if update.message is not None:
-            await update.message.reply_text(promo_text, reply_markup=menu)
+        # Пользователь не имеет промокода — выдаём и поздравляем
+        promo_assigned_text = t(lang, "congrats_promo_assigned", promo=config.PROMO_CODE)
+        await send_reply(update, promo_assigned_text, reply_markup=inline_menu_for_subscribed(lang))
 
         # Уведомляем о получении промокода
         await notify_admin_promo_received(context, user, config.PROMO_CODE)
@@ -334,6 +357,11 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
             user_id, username, full_name, config.PROMO_CODE
         )
         is_new_in_sheet = is_new_in_sheet or created_now
+        try:
+            # Логируем выдачу промокода в отдельный лист promo_log
+            gs.log_promo_issue(user_id, config.PROMO_CODE)
+        except Exception as e:
+            logger.warning("Не удалось залогировать выдачу промокода: %s", e)
 
     # Если запись уже была, но статус мог быть «отписан» — возвращаем её к «подписан»
     if not is_new_in_sheet:
@@ -360,8 +388,7 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if is_sub:
         text = t(lang, "welcome_subscribed")
-        menu = menu_for_subscribed(lang)
-        await update.message.reply_text(text, reply_markup=menu)
+        await send_reply(update, text, reply_markup=inline_menu_for_subscribed(lang))
 
         if prev_status != "подписан" and row is not None:
             gs.mark_subscribed_if_exists(user_id)
@@ -369,7 +396,7 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
         text = t(lang, "start_subscribe")
         # НЕ показываем меню, а сразу предлагаем перейти к 3-му посту
         inline_kb = inline_channel_keyboard(lang)
-        await update.message.reply_text(text, reply_markup=inline_kb)
+        await send_reply(update, text, reply_markup=inline_kb)
 
         if prev_status == "подписан":
             changed = gs.mark_unsubscribed(user_id)
@@ -389,12 +416,12 @@ async def promo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if has_promo and existing_promo:
         text = t(lang, "already_has_promo", promo=existing_promo)
         is_sub = await is_user_subscribed(context, user.id)
-        menu = menu_for_subscribed(lang) if is_sub else menu_for_not_subscribed(lang)
-        await update.message.reply_text(text, reply_markup=menu)
+        menu = inline_menu_for_subscribed(lang) if is_sub else inline_menu_for_not_subscribed(lang)
+        await send_reply(update, text, reply_markup=menu)
     else:
         text = t(lang, "start_subscribe")
         inline_kb = inline_channel_keyboard(lang)
-        await update.message.reply_text(text, reply_markup=inline_kb)
+        await send_reply(update, text, reply_markup=inline_kb)
 
 
 # ---------- Обработчик текстовых кнопок ----------
@@ -431,12 +458,39 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await promo(update, context)
     elif text == btn_go:
         # Просто показываем кнопку для перехода к 3-му посту
-        await update.message.reply_text(
+        msg = cast(Message, update.message)
+        await msg.reply_text(
             t(lang, "go_to_channel_prompt"),
             reply_markup=inline_channel_keyboard(lang),
         )
     else:
         return
+
+
+async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle callback queries from inline buttons."""
+    cq = update.callback_query
+    if cq is None:
+        return
+    data = cq.data
+    # Acknowledge the callback to remove 'loading'
+    try:
+        await cq.answer()
+    except Exception:
+        pass
+
+    if data == "start":
+        await handle_start_command(update, context)
+    elif data == "check":
+        await check_subscription(update, context)
+    elif data == "promo":
+        await promo(update, context)
+    elif data == "go_channel":
+        # Safely obtain language_code from callback_query.from_user (may be None)
+        from_user = getattr(cq, 'from_user', None)
+        user_lang_code = getattr(from_user, 'language_code', None) if from_user is not None else None
+        lang = detect_lang(user_lang_code)
+        await send_reply(update, t(lang, "go_to_channel_prompt"), reply_markup=inline_channel_keyboard(lang))
 
 
 # ---------- Обработчик ошибок ----------
@@ -470,6 +524,7 @@ def main():
     app.add_handler(CommandHandler("check", check_subscription))
     app.add_handler(CommandHandler("promo", promo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), menu_text_handler))
+    app.add_handler(CallbackQueryHandler(lambda u, c: callback_query_handler(u, c)))
 
     app.post_init = set_commands
     app.add_error_handler(error_handler)
