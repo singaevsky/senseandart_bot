@@ -1,9 +1,11 @@
 # bot_service_account.py
 import logging
 from datetime import datetime
+from typing import Optional
 
 from telegram import (
     Update,
+    User,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
@@ -23,6 +25,8 @@ import config
 
 # Работаем с Google Sheets через Service Account
 import google_sheets_service_account as gs
+import json
+from pathlib import Path
 
 
 logging.basicConfig(
@@ -32,13 +36,53 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ---------- Типы ----------
+UserType = User
+
+
+# ---------- Локальный кэш уведомлённых пользователей ----------
+# Файл, в котором храним список user_id, о которых уже уведомляли администратора.
+NOTIFIED_USERS_FILE = Path(getattr(config, 'NOTIFIED_USERS_FILE', Path(__file__).with_name('notified_users.json')))
+
+
+def _load_notified_users() -> set:
+    try:
+        if NOTIFIED_USERS_FILE.exists():
+            with NOTIFIED_USERS_FILE.open('r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return set(int(x) for x in data)
+        return set()
+    except Exception as e:
+        logger.warning("Не удалось загрузить кэш уведомлённых пользователей: %s", e)
+        return set()
+
+
+def _save_notified_users(users: set) -> None:
+    try:
+        tmp = NOTIFIED_USERS_FILE.with_suffix('.tmp')
+        with tmp.open('w', encoding='utf-8') as f:
+            json.dump(sorted(list(users)), f, ensure_ascii=False)
+        tmp.replace(NOTIFIED_USERS_FILE)
+    except Exception as e:
+        logger.warning("Не удалось сохранить кэш уведомлённых пользователей: %s", e)
+
+
+def _mark_user_notified(user_id: int) -> None:
+    users = _load_notified_users()
+    if user_id in users:
+        return
+    users.add(int(user_id))
+    _save_notified_users(users)
+
+
 # ---------- Клавиатуры ----------
 def menu_for_not_subscribed(lang: str) -> ReplyKeyboardMarkup:
     """Меню для неподписанных пользователей."""
     keyboard = [
-        ["Старт", "Проверка подписки"],
-        ["Действующий промокод"],
-        ["Перейти в канал"],
+        [t(lang, "btn_start"), t(lang, "btn_check")],
+        [t(lang, "btn_promo")],
+        [t(lang, "btn_go_to_channel")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -46,10 +90,26 @@ def menu_for_not_subscribed(lang: str) -> ReplyKeyboardMarkup:
 def menu_for_subscribed(lang: str) -> ReplyKeyboardMarkup:
     """Меню для подписанных пользователей."""
     keyboard = [
-        ["Старт", "Проверка подписки"],
-        ["Действующий промокод"],
+        [t(lang, "btn_start"), t(lang, "btn_check")],
+        [t(lang, "btn_promo")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+
+# ---------- Клавиатура с кнопкой перехода в канал ----------
+def inline_channel_keyboard(lang: str) -> InlineKeyboardMarkup:
+    """Inline-клавиатура для перехода к 3-му посту канала."""
+    label = t(lang, "go_to_channel") if lang else "📢 Перейти в канал"
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    text=label,
+                    url="https://t.me/senseandart/3"
+                )
+            ]
+        ]
+    )
 
 
 # ---------- Проверка подписки ----------
@@ -64,6 +124,92 @@ async def is_user_subscribed(context: ContextTypes.DEFAULT_TYPE, user_id: int) -
         return False
 
 
+# ---------- Уведомления администратору ----------
+async def notify_admin_new_user(context: ContextTypes.DEFAULT_TYPE, user: UserType, lang: str):
+    """Уведомляет администратора о новом пользователе бота."""
+    if not config.ADMIN_ID:
+        return
+
+    try:
+        await context.bot.send_message(
+            chat_id=config.ADMIN_ID,
+            text=(
+                f"👋 Новый пользователь бота:\n"
+                f"🆔 ID: {user.id}\n"
+                f"👤 Username: @{user.username if user.username else 'нет'}\n"
+                f"📝 Имя: {user.full_name}\n"
+                f"🌍 Язык: {lang}\n"
+                f"📅 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            ),
+        )
+    except Exception as e:
+        logger.warning("Не удалось уведомить о новом пользователе: %s", e)
+
+
+async def notify_admin_new_subscriber(context: ContextTypes.DEFAULT_TYPE, user: UserType, lang: str):
+    """Уведомляет администратора о новом подписчике канала."""
+    if not config.ADMIN_ID:
+        return
+
+    try:
+        await context.bot.send_message(
+            chat_id=config.ADMIN_ID,
+            text=(
+                f"🎉 Новый подписчик канала!\n"
+                f"🆔 ID: {user.id}\n"
+                f"👤 Username: @{user.username if user.username else 'нет'}\n"
+                f"📝 Имя: {user.full_name}\n"
+                f"🌍 Язык: {lang}\n"
+                f"📅 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"📊 Канал: {config.CHANNEL_USERNAME}"
+            ),
+        )
+    except Exception as e:
+        logger.warning("Не удалось уведомить о новом подписчике: %s", e)
+
+
+async def notify_admin_promo_received(context: ContextTypes.DEFAULT_TYPE, user: UserType, promo: str):
+    """Уведомляет администратора о получении промокода."""
+    if not config.ADMIN_ID:
+        return
+
+    try:
+        await context.bot.send_message(
+            chat_id=config.ADMIN_ID,
+            text=(
+                f"🎁 Промокод получен:\n"
+                f"🆔 ID: {user.id}\n"
+                f"👤 Username: @{user.username if user.username else 'нет'}\n"
+                f"📝 Имя: {user.full_name}\n"
+                f"🎫 Промокод: {promo}\n"
+                f"📅 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            ),
+        )
+    except Exception as e:
+        logger.warning("Не удалось уведомить о получении промокода: %s", e)
+
+
+async def notify_admin_unsubscribed(context: ContextTypes.DEFAULT_TYPE, user: UserType):
+    """Уведомляет администратора об отписке пользователя."""
+    if not config.ADMIN_ID:
+        return
+
+    try:
+        await context.bot.send_message(
+            chat_id=config.ADMIN_ID,
+            text=(
+                f"👋 Пользователь отписался от канала:\n"
+                f"🆔 ID: {user.id}\n"
+                f"👤 Username: @{user.username if user.username else 'нет'}\n"
+                f"📝 Имя: {user.full_name}\n"
+                f"📅 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"📊 Канал: {config.CHANNEL_USERNAME}"
+            ),
+        )
+    except Exception as e:
+        logger.warning("Не удалось уведомить об отписке: %s", e)
+
+
 # ---------- Приветствие при первом запуске ----------
 async def welcome_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает приветственное сообщение при первом запуске бота."""
@@ -75,6 +221,27 @@ async def welcome_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = detect_lang(user.language_code)
 
     logger.info("Новый пользователь %s (%s)", user_id, user.username)
+
+    # Уведомляем администратора о новом пользователе только при первом взаимодействии
+    try:
+        notified = _load_notified_users()
+        if user_id not in notified:
+            try:
+                existing = gs.user_row(user_id)
+            except Exception as e:
+                logger.warning("Ошибка проверки записи пользователя в Google Sheets: %s", e)
+                # При ошибке доступа к Google Sheets — не уведомляем админа сейчас,
+                # но добавляем в локальный кэш, чтобы не повторять попытки.
+                _mark_user_notified(user_id)
+                existing = True
+
+            if existing is None:
+                await notify_admin_new_user(context, user, lang)
+                _mark_user_notified(user_id)
+            else:
+                _mark_user_notified(user_id)
+    except Exception as e:
+        logger.warning("Ошибка при работе с локальным кэшем уведомлений: %s", e)
 
     # Проверяем подписку сразу при приветствии
     subscribed = await is_user_subscribed(context, user_id)
@@ -107,17 +274,38 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
     full_name = user.full_name
     lang = detect_lang(user.language_code)
 
+    # Уведомляем администратора о новом пользователе только при первом взаимодействии
+    try:
+        notified = _load_notified_users()
+        if user_id not in notified:
+            try:
+                existing = gs.user_row(user_id)
+            except Exception as e:
+                logger.warning("Ошибка проверки записи пользователя в Google Sheets: %s", e)
+                _mark_user_notified(user_id)
+                existing = True
+
+            if existing is None:
+                await notify_admin_new_user(context, user, lang)
+                _mark_user_notified(user_id)
+            else:
+                _mark_user_notified(user_id)
+    except Exception as e:
+        logger.warning("Ошибка при работе с локальным кэшем уведомлений: %s", e)
+
     logger.info("Пользователь %s (%s) нажал /start", user_id, username)
 
     subscribed = await is_user_subscribed(context, user_id)
 
     if not subscribed:
-        # Не подписан
-        text = "❌ Вы не подписаны на канал. Подпишитесь и попробуйте снова."
+        # Не подписан - предлагаем перейти к 3-му посту
+        prompt = t(lang, "start_subscribe")
+        inline_kb = inline_channel_keyboard(lang)
+
         if update.message is not None:
             await update.message.reply_text(
-                text,
-                reply_markup=menu_for_not_subscribed(lang),
+                prompt,
+                reply_markup=inline_kb,
             )
         return
 
@@ -138,6 +326,9 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
         if update.message is not None:
             await update.message.reply_text(promo_text, reply_markup=menu)
 
+        # Уведомляем о получении промокода
+        await notify_admin_promo_received(context, user, config.PROMO_CODE)
+
         # Upsert в Google Sheets
         created_now = gs.save_subscriber_to_sheet(
             user_id, username, full_name, config.PROMO_CODE
@@ -149,14 +340,8 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
         gs.mark_subscribed_if_exists(user_id)
 
     # Уведомляем администратора при первой записи (новый подписчик)
-    if is_new_in_sheet and config.ADMIN_ID:
-        try:
-            await context.bot.send_message(
-                chat_id=config.ADMIN_ID,
-                text=f"🆕 Новый подписчик канала: {user_id} (@{username}) язык={lang}",
-            )
-        except Exception as e:
-            logger.warning("Не удалось уведомить администратора: %s", e)
+    if is_new_in_sheet:
+        await notify_admin_new_subscriber(context, user, lang)
 
 
 # ---------- /check ----------
@@ -174,31 +359,22 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
     prev_status = row.get("status") if row is not None else None
 
     if is_sub:
-        text = "✅ Вы подписаны на канал"
+        text = t(lang, "welcome_subscribed")
         menu = menu_for_subscribed(lang)
+        await update.message.reply_text(text, reply_markup=menu)
+
         if prev_status != "подписан" and row is not None:
             gs.mark_subscribed_if_exists(user_id)
     else:
-        text = "❌ Вы не подписаны на канал"
-        menu = menu_for_not_subscribed(lang)
+        text = t(lang, "start_subscribe")
+        # НЕ показываем меню, а сразу предлагаем перейти к 3-му посту
+        inline_kb = inline_channel_keyboard(lang)
+        await update.message.reply_text(text, reply_markup=inline_kb)
 
         if prev_status == "подписан":
             changed = gs.mark_unsubscribed(user_id)
-            if changed and config.ADMIN_ID:
-                try:
-                    await context.bot.send_message(
-                        chat_id=config.ADMIN_ID,
-                        text=(
-                            "👋 Пользователь ОТПИСАЛСЯ от канала:\n"
-                            f"🆔 id: {user_id}\n"
-                            f"👤 username: @{user.username if user.username else 'нет'}\n"
-                            f"📝 имя: {user.full_name}"
-                        ),
-                    )
-                except Exception as e:
-                    logger.warning("Не удалось уведомить об отписке: %s", e)
-
-    await update.message.reply_text(text, reply_markup=menu)
+            if changed:
+                await notify_admin_unsubscribed(context, user)
 
 
 # ---------- /promo ----------
@@ -212,13 +388,13 @@ async def promo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     has_promo, existing_promo = gs.user_has_promo(user.id)
     if has_promo and existing_promo:
         text = t(lang, "already_has_promo", promo=existing_promo)
+        is_sub = await is_user_subscribed(context, user.id)
+        menu = menu_for_subscribed(lang) if is_sub else menu_for_not_subscribed(lang)
+        await update.message.reply_text(text, reply_markup=menu)
     else:
-        text = "Для получения промокода сначала нажмите «Старт» и подпишитесь на канал."
-
-    is_sub = await is_user_subscribed(context, user.id)
-    menu = menu_for_subscribed(lang) if is_sub else menu_for_not_subscribed(lang)
-
-    await update.message.reply_text(text, reply_markup=menu)
+        text = t(lang, "start_subscribe")
+        inline_kb = inline_channel_keyboard(lang)
+        await update.message.reply_text(text, reply_markup=inline_kb)
 
 
 # ---------- Обработчик текстовых кнопок ----------
@@ -226,29 +402,38 @@ async def menu_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message is None or update.effective_user is None:
         return
 
+    lang = detect_lang(update.effective_user.language_code)
     text = (update.message.text or "").strip().lower()
 
-    if text == "старт":
+    # Получаем локализованные варианты кнопок и сравниваем в lower()
+    try:
+        btn_start = t(lang, "btn_start").strip().lower()
+    except Exception:
+        btn_start = "старт"
+    try:
+        btn_check = t(lang, "btn_check").strip().lower()
+    except Exception:
+        btn_check = "проверка подписки"
+    try:
+        btn_promo = t(lang, "btn_promo").strip().lower()
+    except Exception:
+        btn_promo = "действующий промокод"
+    try:
+        btn_go = t(lang, "btn_go_to_channel").strip().lower()
+    except Exception:
+        btn_go = "перейти в канал"
+
+    if text == btn_start:
         await handle_start_command(update, context)
-    elif text == "проверка подписки":
+    elif text == btn_check:
         await check_subscription(update, context)
-    elif text == "действующий промокод":
+    elif text == btn_promo:
         await promo(update, context)
-    elif text == "перейти в канал":
-        # Показываем inline‑клавиатуру со ссылкой на второй пост канала
-        inline_kb = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        text="📢 Перейти в канал",
-                        url="https://t.me/senseandart/3"  # ← Тредтий ПОСТ
-                    )
-                ]
-            ]
-        )
+    elif text == btn_go:
+        # Просто показываем кнопку для перехода к 3-му посту
         await update.message.reply_text(
-            "Нажмите кнопку ниже, чтобы перейти в канал и подписаться:",
-            reply_markup=inline_kb,
+            t(lang, "go_to_channel_prompt"),
+            reply_markup=inline_channel_keyboard(lang),
         )
     else:
         return
@@ -281,7 +466,7 @@ def main():
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
 
     # Новые обработчики
-    app.add_handler(CommandHandler("start", welcome_message))  # Приветствие при /start
+    app.add_handler(CommandHandler("start", handle_start_command))  # Приветствие /start -> обработка старта
     app.add_handler(CommandHandler("check", check_subscription))
     app.add_handler(CommandHandler("promo", promo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), menu_text_handler))
