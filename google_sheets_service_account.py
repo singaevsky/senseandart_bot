@@ -332,6 +332,33 @@ def save_subscribers_df(df: pd.DataFrame):
         raise RuntimeError(f"❌ Не удалось сохранить данные: {e}") from e
 
 
+def log_promo_issue(user_id: int, promo: str, timestamp: Optional[str] = None, gc: Optional[gspread.Client] = None) -> None:
+    """Appends a log entry about promo issuance to a sheet named 'promo_log'.
+
+    Columns: user_id, promo_code, timestamp
+    """
+    try:
+        if timestamp is None:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        if gc is None:
+            gc = _get_gspread_client()
+
+        sp = _open_sheet(gc)
+        # Try to get or create worksheet named 'promo_log'
+        try:
+            ws = sp.worksheet('promo_log')
+        except Exception:
+            ws = sp.add_worksheet(title='promo_log', rows=1000, cols=10)
+            ws.append_row(['user_id', 'promo_code', 'timestamp'])
+
+        # Ensure we pass strings to append_row
+        ws.append_row([str(user_id), str(promo), str(timestamp)])
+        logger.info(f"✅ Logged promo for user {user_id}: {promo}")
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось записать лог промокода: {e}")
+
+
 def user_row(user_id: int) -> Optional[pd.Series]:
     """Находит запись пользователя по ID."""
     df = load_subscribers_df()
