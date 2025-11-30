@@ -6,7 +6,7 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHANNEL_USERNAME = os.getenv("CHANNEL_USERNAME", "@senseandart")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0)) if os.getenv("ADMIN_ID") else None
-PROMO_CODE = os.getenv("PROMO_CODE", "PROMO123")
+PROMO_CODE = os.getenv("PROMO_CODE", "ART10")
 
 # ---------- Google Sheets ----------
 GOOGLE_SHEETS_ID = os.getenv("GOOGLE_SHEETS_ID", "1V4RGuU-nf3iQeelmqCQG8LvvK9ZKozh5Asq1oQUInE0")
@@ -20,3 +20,4 @@ PINNED_POST_URL = os.getenv("PINNED_POST_URL", "https://t.me/senseandart/1")
 YADISK_TOKEN = os.getenv("YADISK_TOKEN")
 YADISK_PATH = os.getenv("YADISK_PATH", "/bot/subscribers.xlsx")
 EXCEL_FILE = "subscribers.xlsx"
+
