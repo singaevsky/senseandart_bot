@@ -121,15 +121,18 @@ def inline_menu_for_subscribed(lang: str) -> InlineKeyboardMarkup:
 def inline_channel_keyboard(lang: str) -> InlineKeyboardMarkup:
     """Inline-клавиатура для перехода к 3-му посту канала."""
     label = t(lang, "go_to_channel") if lang else "📢 Перейти в канал"
+    # Build URL to the 3rd post of the configured channel. Support values like
+    # '@channelname' or 'channelname' in config.CHANNEL_USERNAME.
+    channel = getattr(config, 'CHANNEL_USERNAME', None)
+    if channel:
+        ch = str(channel).lstrip('@')
+        url = f"https://t.me/{ch}/3"
+    else:
+        # Fallback to previous hardcoded path if config not provided
+        url = "https://t.me/senseandart/3"
+
     return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton(
-                    text=label,
-                    url="https://t.me/senseandart/3"
-                )
-            ]
-        ]
+        [[InlineKeyboardButton(text=label, url=url)]]
     )
 
 
