@@ -29,6 +29,7 @@ import config
 import google_sheets_service_account as gs
 import json
 from pathlib import Path
+import os
 
 
 logging.basicConfig(
@@ -78,6 +79,45 @@ def _mark_user_notified(user_id: int) -> None:
     _save_notified_users(users)
 
 
+# ---------- State persistence for dynamic settings (CHANNEL_POST) ----------
+def _load_state() -> None:
+    """Loads dynamic state (CHANNEL_POST) from the configured state file, if present."""
+    try:
+        state_file = getattr(config, 'STATE_FILE', 'bot_state.json')
+        p = Path(state_file)
+        if p.exists():
+            with p.open('r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, dict) and 'CHANNEL_POST' in data:
+                    try:
+                        config.CHANNEL_POST = int(data['CHANNEL_POST'])
+                    except Exception:
+                        logger.debug('Invalid CHANNEL_POST in state file')
+                    # Update PINNED_POST_URL to reflect new value
+                    config.PINNED_POST_URL = f"https://t.me/{config.CHANNEL_USERNAME.lstrip('@')}/{config.CHANNEL_POST}"
+    except Exception as e:
+        logger.debug("Не удалось загрузить состояние: %s", e)
+
+
+def _save_state(channel_post: int) -> None:
+    """Saves dynamic state (CHANNEL_POST) to the configured state file."""
+    try:
+        state_file = getattr(config, 'STATE_FILE', 'bot_state.json')
+        p = Path(state_file)
+        data = {
+            'CHANNEL_POST': int(channel_post)
+        }
+        tmp = p.with_suffix('.tmp')
+        with tmp.open('w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False)
+        tmp.replace(p)
+        # Update runtime config values
+        config.CHANNEL_POST = int(channel_post)
+        config.PINNED_POST_URL = f"https://t.me/{config.CHANNEL_USERNAME.lstrip('@')}/{config.CHANNEL_POST}"
+    except Exception as e:
+        logger.warning("Не удалось сохранить состояние: %s", e)
+
+
 # ---------- Клавиатуры ----------
 def menu_for_not_subscribed(lang: str) -> ReplyKeyboardMarkup:
     """Меню для неподписанных пользователей."""
@@ -94,6 +134,7 @@ def menu_for_subscribed(lang: str) -> ReplyKeyboardMarkup:
     keyboard = [
         [t(lang, "btn_start"), t(lang, "btn_check")],
         [t(lang, "btn_promo")],
+        [t(lang, "btn_go_to_channel")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -126,10 +167,15 @@ def inline_channel_keyboard(lang: str) -> InlineKeyboardMarkup:
     channel = getattr(config, 'CHANNEL_USERNAME', None)
     if channel:
         ch = str(channel).lstrip('@')
-        url = f"https://t.me/{ch}/1"
+        post = getattr(config, 'CHANNEL_POST', 1)
+        try:
+            post = int(post)
+        except Exception:
+            post = 1
+        url = f"https://t.me/{ch}/{post}"
     else:
         # Fallback to previous hardcoded path if config not provided
-        url = "https://t.me/senseandart/1"
+        url = getattr(config, 'PINNED_POST_URL', "https://t.me/uezdcake/1")
 
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton(text=label, url=url)]]
@@ -155,17 +201,18 @@ async def notify_admin_new_user(context: ContextTypes.DEFAULT_TYPE, user: UserTy
         return
 
     try:
-        await context.bot.send_message(
-            chat_id=config.ADMIN_ID,
-            text=(
-                f"👋 Новый пользователь бота:\n"
-                f"🆔 ID: {user.id}\n"
-                f"👤 Username: @{user.username if user.username else 'нет'}\n"
-                f"📝 Имя: {user.full_name}\n"
-                f"🌍 Язык: {lang}\n"
-                f"📅 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            ),
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        username = f"@{user.username}" if getattr(user, 'username', None) else 'нет'
+        text = t(
+            lang,
+            "admin_new_user",
+            id=user.id,
+            username=username,
+            full_name=user.full_name,
+            time=now,
         )
+
+        await context.bot.send_message(chat_id=config.ADMIN_ID, text=text)
     except Exception as e:
         logger.warning("Не удалось уведомить о новом пользователе: %s", e)
 
@@ -176,60 +223,79 @@ async def notify_admin_new_subscriber(context: ContextTypes.DEFAULT_TYPE, user: 
         return
 
     try:
-        await context.bot.send_message(
-            chat_id=config.ADMIN_ID,
-            text=(
-                f"🎉 Новый подписчик канала!\n"
-                f"🆔 ID: {user.id}\n"
-                f"👤 Username: @{user.username if user.username else 'нет'}\n"
-                f"📝 Имя: {user.full_name}\n"
-                f"🌍 Язык: {lang}\n"
-                f"📅 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"📊 Канал: {config.CHANNEL_USERNAME}"
-            ),
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        username = f"@{user.username}" if getattr(user, 'username', None) else 'нет'
+        text = t(
+            lang,
+            "admin_new_subscriber",
+            id=user.id,
+            username=username,
+            full_name=user.full_name,
+            time=now,
+            channel=config.CHANNEL_USERNAME,
         )
+
+        await context.bot.send_message(chat_id=config.ADMIN_ID, text=text)
     except Exception as e:
         logger.warning("Не удалось уведомить о новом подписчике: %s", e)
 
 
-async def notify_admin_promo_received(context: ContextTypes.DEFAULT_TYPE, user: UserType, promo: str):
-    """Уведомляет администратора о получении промокода."""
+async def notify_admin_promo_received(
+    context: ContextTypes.DEFAULT_TYPE,
+    user: UserType,
+    promo: str,
+    source: Optional[str] = None,
+    lang: Optional[str] = None,
+):
+    """Уведомляет администратора о получении промокода. Принимает необязательный источник выдачи и язык для локализации."""
     if not config.ADMIN_ID:
         return
 
     try:
-        await context.bot.send_message(
-            chat_id=config.ADMIN_ID,
-            text=(
-                f"🎁 Промокод получен:\n"
-                f"🆔 ID: {user.id}\n"
-                f"👤 Username: @{user.username if user.username else 'нет'}\n"
-                f"📝 Имя: {user.full_name}\n"
-                f"🎫 Промокод: {promo}\n"
-                f"📅 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            ),
+        # Determine language if not provided
+        if not lang:
+            lang = detect_lang(getattr(user, 'language_code', None))
+
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        username = f"@{user.username}" if getattr(user, 'username', None) else 'нет'
+        text = t(
+            lang,
+            "admin_promo_received",
+            id=user.id,
+            username=username,
+            full_name=user.full_name,
+            promo=promo,
+            time=now,
+            source=(source or "-"),
         )
+
+        await context.bot.send_message(chat_id=config.ADMIN_ID, text=text)
     except Exception as e:
         logger.warning("Не удалось уведомить о получении промокода: %s", e)
 
 
-async def notify_admin_unsubscribed(context: ContextTypes.DEFAULT_TYPE, user: UserType):
+async def notify_admin_unsubscribed(context: ContextTypes.DEFAULT_TYPE, user: UserType, lang: Optional[str] = None):
     """Уведомляет администратора об отписке пользователя."""
     if not config.ADMIN_ID:
         return
 
     try:
-        await context.bot.send_message(
-            chat_id=config.ADMIN_ID,
-            text=(
-                f"👋 Пользователь отписался от канала:\n"
-                f"🆔 ID: {user.id}\n"
-                f"👤 Username: @{user.username if user.username else 'нет'}\n"
-                f"📝 Имя: {user.full_name}\n"
-                f"📅 Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"📊 Канал: {config.CHANNEL_USERNAME}"
-            ),
+        if not lang:
+            lang = detect_lang(getattr(user, 'language_code', None))
+
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        username = f"@{user.username}" if getattr(user, 'username', None) else 'нет'
+        text = t(
+            lang,
+            "admin_unsubscribed",
+            id=user.id,
+            username=username,
+            full_name=user.full_name,
+            time=now,
+            channel=config.CHANNEL_USERNAME,
         )
+
+        await context.bot.send_message(chat_id=config.ADMIN_ID, text=text)
     except Exception as e:
         logger.warning("Не удалось уведомить об отписке: %s", e)
 
@@ -353,18 +419,31 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await send_reply(update, promo_assigned_text, reply_markup=menu_for_subscribed(lang))
 
         # Уведомляем о получении промокода
-        await notify_admin_promo_received(context, user, config.PROMO_CODE)
+        await notify_admin_promo_received(context, user, config.PROMO_CODE, source="start")
 
         # Upsert в Google Sheets
         created_now = gs.save_subscriber_to_sheet(
-            user_id, username, full_name, config.PROMO_CODE
+            user_id, username, full_name, config.PROMO_CODE, issued_by="start"
         )
         is_new_in_sheet = is_new_in_sheet or created_now
         try:
             # Логируем выдачу промокода в отдельный лист promo_log
-            gs.log_promo_issue(user_id, config.PROMO_CODE)
+            gs.log_promo_issue(user_id, config.PROMO_CODE, source="start")
         except Exception as e:
             logger.warning("Не удалось залогировать выдачу промокода: %s", e)
+
+        # Отправляем пользователю ссылку на пост со скидкой
+        try:
+            await send_reply(update, t(lang, "go_to_channel_prompt"), reply_markup=inline_channel_keyboard(lang))
+        except Exception:
+            logger.debug("Не удалось отправить пользователю ссылку на пост после выдачи промо")
+
+        # Попытка опубликовать поздравление в канале (если бот имеет права)
+        try:
+            channel_text = t(lang, "channel_congrats", username=(username or full_name or str(user_id)), promo=config.PROMO_CODE)
+            await context.bot.send_message(chat_id=config.CHANNEL_USERNAME, text=channel_text)
+        except Exception as e:
+            logger.debug("Не удалось опубликовать сообщение в канале: %s", e)
 
     # Если запись уже была, но статус мог быть «отписан» — возвращаем её к «подписан»
     if not is_new_in_sheet:
@@ -395,6 +474,26 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         if prev_status != "подписан" and row is not None:
             gs.mark_subscribed_if_exists(user_id)
+
+        # Если пользователь только что стал подписанным и не имеет промокода — выдаём
+        has_promo, existing_promo = gs.user_has_promo(user_id)
+        if not has_promo:
+            promo_assigned_text = t(lang, "congrats_promo_assigned", promo=config.PROMO_CODE)
+            await send_reply(update, promo_assigned_text, reply_markup=menu_for_subscribed(lang))
+            await notify_admin_promo_received(context, user, config.PROMO_CODE, source="check_subscription")
+            try:
+                gs.save_subscriber_to_sheet(user_id, user.username, user.full_name, config.PROMO_CODE, issued_by="check_subscription")
+            except Exception:
+                logger.warning("Не удалось сохранить подписчика после выдачи промо при проверке подписки")
+            try:
+                gs.log_promo_issue(user_id, config.PROMO_CODE, source="check_subscription")
+            except Exception:
+                logger.debug("Не удалось залогировать промо при проверке подписки")
+            try:
+                channel_text = t(lang, "channel_congrats", username=(user.username or user.full_name or str(user_id)), promo=config.PROMO_CODE)
+                await context.bot.send_message(chat_id=config.CHANNEL_USERNAME, text=channel_text)
+            except Exception as e:
+                logger.debug("Не удалось опубликовать сообщение в канале (check_subscription): %s", e)
     else:
         text = t(lang, "start_subscribe")
         # НЕ показываем меню, а сразу предлагаем перейти к 3-му посту
@@ -510,8 +609,60 @@ async def set_commands(app: Application):
             BotCommand("start", "🚀 Получить промокод"),
             BotCommand("check", "🔍 Проверка подписки"),
             BotCommand("promo", "🎁 Промокод"),
+            BotCommand("setpost", "🔧 Установить номер поста канала (админ)")
         ]
     )
+
+
+# ---------- /setpost command (admin-only) ----------
+async def setpost_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user is None or update.message is None:
+        return
+
+        # Allow group administrators to change the post when command is run in a group
+        chat = update.effective_chat
+        is_allowed = False
+        try:
+            if chat is not None and chat.type in ("group", "supergroup"):
+                # Проверяем, является ли пользователь администратором в чате
+                try:
+                    member = await context.bot.get_chat_member(chat.id, user.id)
+                    if member.status in ("administrator", "creator"):
+                        is_allowed = True
+                except Exception:
+                    is_allowed = False
+            else:
+                # В приватном чате — только явный ADMIN_ID
+                if getattr(config, 'ADMIN_ID', None) is not None and user.id == config.ADMIN_ID:
+                    is_allowed = True
+        except Exception:
+            is_allowed = False
+
+        if not is_allowed:
+            await send_reply(update, "У вас нет прав для выполнения этой команды.")
+            return
+
+    args = context.args or []
+    if not args:
+        await send_reply(update, "Использование: /setpost <номер поста> (например: /setpost 3)")
+        return
+
+    try:
+        post_num = int(args[0])
+        if post_num <= 0:
+            raise ValueError("must be positive")
+    except Exception:
+        await send_reply(update, "Неверный номер поста. Укажите положительное целое число.")
+        return
+
+    # Save and apply state
+    prev = getattr(config, 'CHANNEL_POST', None)
+    _save_state(post_num)
+    # Determine context where change applied
+    chat = update.effective_chat
+    where = "в группе" if (chat is not None and chat.type in ("group", "supergroup")) else "в личных сообщениях"
+    await send_reply(update, f"Номер поста канала изменён {where}: {prev} → {post_num}. Сохранено в {getattr(config,'STATE_FILE','bot_state.json')}")
 
 
 def main():
@@ -525,12 +676,19 @@ def main():
     # Новые обработчики
     app.add_handler(CommandHandler("start", handle_start_command))  # Приветствие /start -> обработка старта
     app.add_handler(CommandHandler("check", check_subscription))
+    app.add_handler(CommandHandler("setpost", setpost_command))
     app.add_handler(CommandHandler("promo", promo))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), menu_text_handler))
     app.add_handler(CallbackQueryHandler(lambda u, c: callback_query_handler(u, c)))
 
     app.post_init = set_commands
     app.add_error_handler(error_handler)
+
+    # Load persistent state (CHANNEL_POST) if present
+    try:
+        _load_state()
+    except Exception as e:
+        logger.debug("Не удалось загрузить сохранённое состояние при запуске: %s", e)
 
     logger.info("✅ Бот для канала запущен")
     app.run_polling(drop_pending_updates=True)

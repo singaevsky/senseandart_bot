@@ -193,6 +193,7 @@ def _ensure_header(worksheet: gspread.Worksheet) -> List[str]:
         "full_name",
         "joined_at",
         "promo_code",
+        "issued_by",
         "status",
         "unsubscribed_at",
     ]
@@ -253,6 +254,9 @@ def _dataframe_from_rows(rows: List[List], header: List[str]) -> pd.DataFrame:
         df["user_id"] = pd.to_numeric(df["user_id"], errors="coerce").astype("Int64")
         # Обрабатываем промокод
         df["promo_code"] = df["promo_code"].apply(lambda x: x if str(x).strip() else None)
+        # issued_by might be empty; normalize empty strings
+        if "issued_by" in df.columns:
+            df["issued_by"] = df["issued_by"].apply(lambda x: x if str(x).strip() else None)
 
     logger.info(f"📊 Загружено записей: {len(df)}")
     return df
@@ -304,7 +308,7 @@ def load_subscribers_df() -> pd.DataFrame:
         # Возвращаем пустой DataFrame с правильными колонками
         return pd.DataFrame(columns=[
             "user_id", "username", "full_name", "joined_at",
-            "promo_code", "status", "unsubscribed_at"
+            "promo_code", "issued_by", "status", "unsubscribed_at"
         ])
 
 
@@ -332,10 +336,10 @@ def save_subscribers_df(df: pd.DataFrame):
         raise RuntimeError(f"❌ Не удалось сохранить данные: {e}") from e
 
 
-def log_promo_issue(user_id: int, promo: str, timestamp: Optional[str] = None, gc: Optional[gspread.Client] = None) -> None:
+def log_promo_issue(user_id: int, promo: str, timestamp: Optional[str] = None, source: Optional[str] = None, gc: Optional[gspread.Client] = None) -> None:
     """Appends a log entry about promo issuance to a sheet named 'promo_log'.
 
-    Columns: user_id, promo_code, timestamp
+    Columns: user_id, promo_code, timestamp, issued_by
     """
     try:
         if timestamp is None:
@@ -350,10 +354,10 @@ def log_promo_issue(user_id: int, promo: str, timestamp: Optional[str] = None, g
             ws = sp.worksheet('promo_log')
         except Exception:
             ws = sp.add_worksheet(title='promo_log', rows=1000, cols=10)
-            ws.append_row(['user_id', 'promo_code', 'timestamp'])
+            ws.append_row(['user_id', 'promo_code', 'timestamp', 'issued_by'])
 
         # Ensure we pass strings to append_row
-        ws.append_row([str(user_id), str(promo), str(timestamp)])
+        ws.append_row([str(user_id), str(promo), str(timestamp), str(source or "")])
         logger.info(f"✅ Logged promo for user {user_id}: {promo}")
     except Exception as e:
         logger.warning(f"⚠️ Не удалось записать лог промокода: {e}")
@@ -397,6 +401,7 @@ def save_subscriber_to_sheet(
     username: Optional[str],
     full_name: Optional[str],
     promo_code: str,
+    issued_by: Optional[str] = None,
 ) -> bool:
     """
     Сохраняет подписчика в таблицу (upsert).
@@ -415,6 +420,7 @@ def save_subscriber_to_sheet(
                 "full_name": full_name or "",
                 "joined_at": now_str,
                 "promo_code": promo_code,
+                "issued_by": issued_by or "",
                 "status": "подписан",
                 "unsubscribed_at": "",
             })
@@ -432,6 +438,9 @@ def save_subscriber_to_sheet(
                 df.at[i, "full_name"] = full_name or ""
             if pd.isna(df.at[i, "promo_code"]) or df.at[i, "promo_code"] == "":
                 df.at[i, "promo_code"] = promo_code
+            # Обновляем поле issued_by если передан источник выдачи
+            if issued_by is not None and (pd.isna(df.at[i, "issued_by"]) or df.at[i, "issued_by"] == ""):
+                df.at[i, "issued_by"] = issued_by
             df.at[i, "status"] = "подписан"
             if pd.isna(df.at[i, "joined_at"]) or df.at[i, "joined_at"] == "":
                 df.at[i, "joined_at"] = now_str

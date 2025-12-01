@@ -1,7 +1,7 @@
 {
-  "welcome_not_subscribed": "👋 Добро пожаловать! Чтобы получить промокод, подпишитесь на канал и нажмите «Старт».",
+  "welcome_not_subscribed": "👋 Добро пожаловать! Чтобы получить промокод, подпишитесь на канал и нажмите «Хочу код!».",
   "welcome_subscribed": "🎉 Спасибо за подписку! Нажмите «Хочу код!» для получения промокода.",
-  "start_subscribe": "Добро пожаловать! Чтобы получить промокод, подпишитесь на канал и нажмите «Старт».",
+  "start_subscribe": "Добро пожаловать! Чтобы получить промокод, подпишитесь на канал, затем нажмите /start или используйте «Проверка подписки».",
   "already_has_promo": "У вас уже есть промокод: {promo}",
   "start_promo": "Ваш промокод: {promo}",
   "go_to_channel": "Открыть канал",
@@ -15,4 +15,9 @@
   "subscribed_thanks_no_more": "🎉 Спасибо за подписку! Будем рады если вы примете участие в следующих акциях нашего канала.",
   "subscribed_thanks_with_promo": "🎉 Спасибо за подписку! Вам предоставлен промокод: {promo}. Будем рады если вы примете участие в следующих акциях нашего канала.",
   "congrats_promo_assigned": "Поздравляем! Вам предоставлен промокод: {promo}"
+  ,"channel_congrats": "🎉 Пользователь {username} присоединился и получил промокод: {promo}"
+  ,"admin_new_user": "👋 Новый пользователь бота:\n🆔 ID: {id}\n👤 Username: {username}\n📝 Имя: {full_name}\n🌍 Язык: {lang}\n📅 Время: {time}"
+  ,"admin_new_subscriber": "🎉 Новый подписчик канала!\n🆔 ID: {id}\n👤 Username: {username}\n📝 Имя: {full_name}\n🌍 Язык: {lang}\n📅 Время: {time}\n📊 Канал: {channel}"
+  ,"admin_promo_received": "🎁 Промокод получен:\n🆔 ID: {id}\n👤 Username: {username}\n📝 Имя: {full_name}\n🎫 Промокод: {promo}\n📅 Время: {time}\n🔎 Источник: {source}"
+  ,"admin_unsubscribed": "👋 Пользователь отписался от канала:\n🆔 ID: {id}\n👤 Username: {username}\n📝 Имя: {full_name}\n📅 Время: {time}\n📊 Канал: {channel}"
 }

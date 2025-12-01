@@ -1,5 +1,5 @@
 {
-  "start_subscribe": "Hi! To get a 10% discount promo code, please subscribe to the \"Art and Meanings\" channel first.",
+  "start_subscribe": "Hi! To get a 10% discount promo code, please subscribe to the channel, then press /start or use \"Check subscription\".",
   "start_promo": "Thanks for subscribing!\n\nYour 10% discount promo code: {promo}\nUse it when ordering on our website.",
   "already_has_promo": "You have already received a promo code. Use this code: {promo}",
   "channel_button": "Go to channel",
@@ -11,8 +11,15 @@
   "status_subscribed": "✅ You are subscribed to the channel",
   "status_not_subscribed": "❌ You are not subscribed to the channel",
   "go_to_channel_prompt": "Press the button below to go to the channel and subscribe:",
+  "go_to_channel": "Go to channel",
+  "welcome_not_subscribed": "👋 Welcome! To get a promo code, please subscribe to the channel and press \"I want the code!\".",
   "welcome_subscribed": "🎉 Thanks for subscribing! Press \"I want the code!\" to receive your promo code.",
   "subscribed_thanks_no_more": "🎉 Thanks for subscribing! We hope you'll join our future channel promotions.",
   "subscribed_thanks_with_promo": "🎉 Thanks for subscribing! You've been provided the promo code: {promo}. We hope you'll join our future channel promotions.",
   "congrats_promo_assigned": "Congratulations! You've been assigned a promo code: {promo}"
+  ,"channel_congrats": "🎉 User {username} joined and received promo code: {promo}"
+  ,"admin_new_user": "👋 New bot user:\n🆔 ID: {id}\n👤 Username: {username}\n📝 Full name: {full_name}\n🌍 Lang: {lang}\n📅 Time: {time}"
+  ,"admin_new_subscriber": "🎉 New channel subscriber!\n🆔 ID: {id}\n👤 Username: {username}\n📝 Full name: {full_name}\n🌍 Lang: {lang}\n📅 Time: {time}\n📊 Channel: {channel}"
+  ,"admin_promo_received": "🎁 Promo received:\n🆔 ID: {id}\n👤 Username: {username}\n📝 Full name: {full_name}\n🎫 Promo: {promo}\n📅 Time: {time}\n🔎 Source: {source}"
+  ,"admin_unsubscribed": "👋 User unsubscribed from channel:\n🆔 ID: {id}\n👤 Username: {username}\n📝 Full name: {full_name}\n📅 Time: {time}\n📊 Channel: {channel}"
 }
