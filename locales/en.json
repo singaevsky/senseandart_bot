@@ -1,5 +1,5 @@
 {
-  "start_subscribe": "Hi! To get a 10% discount promo code, please subscribe to the channel, then press /start or use \"Check subscription\".",
+  "start_subscribe": "Hi! To get a 10% discount promo code, please subscribe to the channel, then press /start",
   "start_promo": "Thanks for subscribing!\n\nYour 10% discount promo code: {promo}\nUse it when ordering on our website.",
   "already_has_promo": "You have already received a promo code. Use this code: {promo}",
   "channel_button": "Go to channel",
