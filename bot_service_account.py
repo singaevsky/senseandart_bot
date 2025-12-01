@@ -122,8 +122,7 @@ def _save_state(channel_post: int) -> None:
 def menu_for_not_subscribed(lang: str) -> ReplyKeyboardMarkup:
     """Меню для неподписанных пользователей."""
     keyboard = [
-        [t(lang, "btn_start"), t(lang, "btn_check")],
-        [t(lang, "btn_promo")],
+        [t(lang, "btn_check")],
         [t(lang, "btn_go_to_channel")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -132,8 +131,7 @@ def menu_for_not_subscribed(lang: str) -> ReplyKeyboardMarkup:
 def menu_for_subscribed(lang: str) -> ReplyKeyboardMarkup:
     """Меню для подписанных пользователей."""
     keyboard = [
-        [t(lang, "btn_start"), t(lang, "btn_check")],
-        [t(lang, "btn_promo")],
+        [t(lang, "btn_check")],
         [t(lang, "btn_go_to_channel")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -142,8 +140,7 @@ def menu_for_subscribed(lang: str) -> ReplyKeyboardMarkup:
 def inline_menu_for_not_subscribed(lang: str) -> InlineKeyboardMarkup:
     """Inline-меню для неподписанных пользователей."""
     buttons = [
-        [InlineKeyboardButton(text=t(lang, "btn_start"), callback_data="start") , InlineKeyboardButton(text=t(lang, "btn_check"), callback_data="check")],
-        [InlineKeyboardButton(text=t(lang, "btn_promo"), callback_data="promo")],
+        [InlineKeyboardButton(text=t(lang, "btn_check"), callback_data="check")],
         [InlineKeyboardButton(text=t(lang, "btn_go_to_channel"), callback_data="go_channel")],
     ]
     return InlineKeyboardMarkup(buttons)
@@ -152,8 +149,8 @@ def inline_menu_for_not_subscribed(lang: str) -> InlineKeyboardMarkup:
 def inline_menu_for_subscribed(lang: str) -> InlineKeyboardMarkup:
     """Inline-меню для подписанных пользователей."""
     buttons = [
-        [InlineKeyboardButton(text=t(lang, "btn_start"), callback_data="start") , InlineKeyboardButton(text=t(lang, "btn_check"), callback_data="check")],
-        [InlineKeyboardButton(text=t(lang, "btn_promo"), callback_data="promo")],
+        [InlineKeyboardButton(text=t(lang, "btn_check"), callback_data="check")],
+        [InlineKeyboardButton(text=t(lang, "btn_go_to_channel"), callback_data="go_channel")],
     ]
     return InlineKeyboardMarkup(buttons)
 
@@ -356,7 +353,15 @@ async def welcome_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_reply(update, t(lang, "welcome_not_subscribed"), reply_markup=menu_for_not_subscribed(lang))
     else:
         # Подписан - показываем приветствие и меню (reply keyboard для совместимости)
-        await send_reply(update, t(lang, "welcome_subscribed"), reply_markup=menu_for_subscribed(lang))
+        # Проверяем, есть ли у пользователя уже промокод
+        has_promo, existing_promo = gs.user_has_promo(user_id)
+        if has_promo and existing_promo:
+            # Пользователь уже имеет промокод — показываем сообщение с промокодом
+            text = t(lang, "promo_already_received", promo=existing_promo)
+            await send_reply(update, text, reply_markup=menu_for_subscribed(lang))
+        else:
+            # Пользователь не имеет промокода — просто приветствуем
+            await send_reply(update, t(lang, "welcome_subscribed"), reply_markup=menu_for_subscribed(lang))
 
 
 # ---------- Обработчик команды /start ----------
@@ -401,7 +406,7 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await send_reply(update, prompt, reply_markup=inline_kb)
         return
 
-    # Подписан - выдаем промокод
+    # Подписан - выдаем промокод или поздравление в зависимости от того, получал ли пользователь промокод ранее
     menu = menu_for_subscribed(lang)
 
     row = gs.user_row(user_id)
@@ -410,12 +415,12 @@ async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYP
     has_promo, existing_promo = gs.user_has_promo(user_id)
 
     if has_promo and existing_promo:
-        # Пользователь уже имеет промокод — показываем сообщение с промокодом и приглашением
-        text = t(lang, "subscribed_thanks_with_promo", promo=existing_promo)
+        # Пользователь уже имеет промокод — показываем сообщение с промокодом и поздравлением
+        text = t(lang, "promo_already_received", promo=existing_promo)
         await send_reply(update, text, reply_markup=menu_for_subscribed(lang))
     else:
         # Пользователь не имеет промокода — выдаём и поздравляем
-        promo_assigned_text = t(lang, "congrats_promo_assigned", promo=config.PROMO_CODE)
+        promo_assigned_text = t(lang, "first_time_congrats", promo=config.PROMO_CODE)
         await send_reply(update, promo_assigned_text, reply_markup=menu_for_subscribed(lang))
 
         # Уведомляем о получении промокода
@@ -475,10 +480,15 @@ async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if prev_status != "подписан" and row is not None:
             gs.mark_subscribed_if_exists(user_id)
 
-        # Если пользователь только что стал подписанным и не имеет промокода — выдаём
+        # Если пользователь подписан - проверяем, есть ли у него уже промокод
         has_promo, existing_promo = gs.user_has_promo(user_id)
-        if not has_promo:
-            promo_assigned_text = t(lang, "congrats_promo_assigned", promo=config.PROMO_CODE)
+        if has_promo and existing_promo:
+            # Пользователь уже имеет промокод — показываем сообщение с промокодом и поздравлением
+            text = t(lang, "promo_already_received", promo=existing_promo)
+            await send_reply(update, text, reply_markup=menu_for_subscribed(lang))
+        else:
+            # Пользователь не имеет промокода — выдаём и поздравляем
+            promo_assigned_text = t(lang, "first_time_congrats", promo=config.PROMO_CODE)
             await send_reply(update, promo_assigned_text, reply_markup=menu_for_subscribed(lang))
             await notify_admin_promo_received(context, user, config.PROMO_CODE, source="check_subscription")
             try:
@@ -514,16 +524,25 @@ async def promo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lang = detect_lang(user.language_code)
 
-    has_promo, existing_promo = gs.user_has_promo(user.id)
-    if has_promo and existing_promo:
-        text = t(lang, "already_has_promo", promo=existing_promo)
-        is_sub = await is_user_subscribed(context, user.id)
-        menu = menu_for_subscribed(lang) if is_sub else menu_for_not_subscribed(lang)
-        await send_reply(update, text, reply_markup=menu)
-    else:
+    is_sub = await is_user_subscribed(context, user.id)
+    if not is_sub:
+        # Пользователь не подписан - не выдаем промокод
         text = t(lang, "start_subscribe")
         inline_kb = inline_channel_keyboard(lang)
         await send_reply(update, text, reply_markup=inline_kb)
+    else:
+        # Пользователь подписан - проверяем, есть ли у него уже промокод
+        has_promo, existing_promo = gs.user_has_promo(user.id)
+        if has_promo and existing_promo:
+            # Пользователь уже имеет промокод — показываем сообщение с промокодом и поздравлением
+            text = t(lang, "promo_already_received", promo=existing_promo)
+            menu = menu_for_subscribed(lang)
+            await send_reply(update, text, reply_markup=menu)
+        else:
+            # Пользователь не имеет промокода — выдаём и поздравляем
+            text = t(lang, "start_subscribe")
+            inline_kb = inline_channel_keyboard(lang)
+            await send_reply(update, text, reply_markup=inline_kb)
 
 
 # ---------- Обработчик текстовых кнопок ----------
@@ -606,7 +625,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 async def set_commands(app: Application):
     await app.bot.set_my_commands(
         [
-            BotCommand("start", "🚀 Получить промокод"),
+            BotCommand("start", "🚀 Начать"),
             BotCommand("check", "🔍 Проверка подписки"),
             BotCommand("promo", "🎁 Промокод"),
             BotCommand("setpost", "🔧 Установить номер поста канала (админ)")
